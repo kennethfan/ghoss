@@ -4,11 +4,9 @@ build/
 
 # Config file (contains sensitive token)
 .config.yaml
-~/.ghoss/config.yaml
 
 # Cache
 .cache/
-~/.ghoss/cache/
 
 # Test artifacts
 *.test
@@ -24,3 +22,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# build file
+bin

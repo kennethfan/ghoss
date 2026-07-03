@@ -223,11 +223,14 @@ func uploadFile(client *github.Client, filePath string, cfg *config.Config) mode
 		}
 	}
 
-	url := client.GetFileURL(targetPath)
+	fileURL, err := client.GetFileURL(targetPath)
+	if err != nil {
+		fileURL = ""
+	}
 	return models.UploadResult{
 		Success: true,
 		Message: fmt.Sprintf("Successfully uploaded: %s", filePath),
-		URL:     url,
+		URL:     fileURL,
 	}
 }
 
@@ -460,10 +463,14 @@ var urlCmd = &cobra.Command{
 		}
 
 		filePath := storage.NormalizePath(args[0])
-		url := client.GetFileURL(filePath)
+		fileURL, err := client.GetFileURL(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 
-		fmt.Println(url)
-		fmt.Printf("\nAccess your file at: %s\n", url)
+		fmt.Println(fileURL)
+		fmt.Printf("\nAccess your file at: %s\n", fileURL)
 	},
 }
 

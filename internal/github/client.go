@@ -2,11 +2,9 @@ package github
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 
 	"github.com/google/go-github/github"
@@ -60,7 +58,7 @@ func (c *Client) UploadFile(filePath, contentPath, message string) (*github.Repo
 }
 
 // DownloadFile downloads a file from the GitHub repository.
-// Returns the original raw file content.
+// Returns the original raw file content using go-github library's native method.
 func (c *Client) DownloadFile(contentPath string) ([]byte, *github.RepositoryContent, error) {
 	// Get file metadata and content from GitHub API
 	file, _, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, contentPath, nil)
@@ -70,38 +68,33 @@ func (c *Client) DownloadFile(contentPath string) ([]byte, *github.RepositoryCon
 
 	// If it's a file (not a directory)
 	if file.Type != nil && *file.Type == "file" {
-		// Get the raw content using the download_url if available
-		if file.DownloadURL != nil {
-			resp, err := http.Get(*file.DownloadURL)
-			if err == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					content, err := io.ReadAll(resp.Body)
-					if err == nil {
-						return content, file, nil
-					}
-				}
-			}
+		// Use the library's native GetDownloadURL() method to get the raw file URL
+		downloadURL := file.GetDownloadURL()
+		if downloadURL == "" {
+			return nil, nil, fmt.Errorf("download URL is not available")
 		}
 
-		// Fallback: decode from the API response
-		if file.Encoding != nil && *file.Encoding == "base64" {
-			content, err := file.GetContent()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to get file content: %w", err)
-			}
-
-			// Decode base64 content to get original file
-			decoded, err := base64.StdEncoding.DecodeString(content)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to decode file: %w", err)
-			}
-
-			return decoded, file, nil
+		// Download the file using the standard http client
+		resp, err := http.Get(downloadURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to download: %w", err)
 		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, nil, fmt.Errorf("failed to download: HTTP %d", resp.StatusCode)
+		}
+
+		// Read the response body directly (no decoding needed)
+		content, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read content: %w", err)
+		}
+
+		return content, file, nil
 	}
 
-	return nil, nil, fmt.Errorf("path is not a file or cannot be downloaded")
+	return nil, nil, fmt.Errorf("path is not a file")
 }
 
 // ListFiles lists files in a directory.
@@ -136,10 +129,21 @@ func (c *Client) DeleteFile(contentPath, message string) (*github.RepositoryCont
 	return c.client.Repositories.DeleteFile(c.ctx, c.owner, c.repo, contentPath, opts)
 }
 
-// GetFileURL returns the raw file URL.
-func (c *Client) GetFileURL(contentPath string) string {
-	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s",
-		c.owner, c.repo, c.branch, url.PathEscape(contentPath))
+// GetFileURL returns the raw file URL using GitHub API's native GetContents method.
+func (c *Client) GetFileURL(contentPath string) (string, error) {
+	// Use GetContents to get file metadata
+	file, _, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, contentPath, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get file: %w", err)
+	}
+
+	// Return the native download URL from the library
+	downloadURL := file.GetDownloadURL()
+	if downloadURL == "" {
+		return "", fmt.Errorf("download URL is not available for: %s", contentPath)
+	}
+
+	return downloadURL, nil
 }
 
 // IsConfigured checks if the client has required configuration.
