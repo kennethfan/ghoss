@@ -1,0 +1,2 @@
+# ghoss
+file localstorage
