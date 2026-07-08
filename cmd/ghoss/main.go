@@ -410,13 +410,15 @@ var lsCmd = &cobra.Command{
 	},
 }
 
+var rmRecursive bool
+
 // rmCmd represents the remove command.
 var rmCmd = &cobra.Command{
 	Use:   "rm [file path]",
 	Short: "Delete a file from GitHub repository",
-	Long:  `Delete a file from your GitHub repository.`,
+	Long:  `Delete a file or directory from your GitHub repository. Use -r to delete directories recursively.`,
 	Example: `  ghoss rm photos/image.jpg
-  ghoss rm docs/report.pdf`,
+  ghoss rm -r photos/`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
 			fmt.Fprintln(os.Stderr, "Error: please specify the file path to delete")
@@ -424,32 +426,57 @@ var rmCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Create GitHub client
 		client := github.NewClient(cfg.Github.Token, cfg.Github.Owner, cfg.Github.Repo, cfg.Github.Branch)
-
 		if !client.IsConfigured() {
 			fmt.Fprintln(os.Stderr, "Error: GitHub repository not configured. Please run 'ghoss init' first.")
 			os.Exit(1)
 		}
 
 		filePath := storage.NormalizePath(args[0])
-		message := "delete: " + filepath.Base(filePath)
-
-		_, _, err = client.DeleteFile(filePath, message)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
-			os.Exit(1)
+		if rmRecursive {
+			deleteRecursive(client, filePath)
+		} else {
+			message := "delete: " + filepath.Base(filePath)
+			_, _, err = client.DeleteFile(filePath, message)
+			if err != nil {
+				if strings.Contains(err.Error(), "is a directory") {
+					fmt.Fprintf(os.Stderr, "Error: %s is a directory. Use -r to delete recursively.\n", filePath)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
+				}
+				os.Exit(1)
+			}
+			fmt.Printf("Successfully deleted: %s\n", filePath)
 		}
-
-		fmt.Printf("Successfully deleted: %s\n", filePath)
 	},
+}
+
+// deleteRecursive lists all files under path and deletes each one.
+func deleteRecursive(client *github.Client, dirPath string) {
+	entries, _, err := client.ListFiles(dirPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing %s: %v\n", dirPath, err)
+		os.Exit(1)
+	}
+	for _, e := range entries {
+		if e.Type != nil && *e.Type == "dir" {
+			deleteRecursive(client, e.GetPath())
+		} else {
+			msg := "delete: " + filepath.Base(e.GetPath())
+			_, _, err := client.DeleteFile(e.GetPath(), msg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", e.GetPath(), err)
+				os.Exit(1)
+			}
+			fmt.Printf("Deleted: %s\n", e.GetPath())
+		}
+	}
 }
 
 // urlCmd generates the public URL for a file.
@@ -562,6 +589,9 @@ func main() {
 	lsCmd.Flags().BoolVarP(&lsReverse, "reverse", "r", false, "Reverse sort order")
 	lsCmd.Flags().BoolVarP(&lsRecursive, "recursive", "R", false, "Recursively list subdirectories")
 	lsCmd.Flags().BoolVar(&lsJSON, "json", false, "JSON output format")
+
+	// rm flags
+	rmCmd.Flags().BoolVarP(&rmRecursive, "recursive", "r", false, "Recursively delete directories")
 
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 

@@ -122,15 +122,30 @@ func (c *Client) ListCommits(path string) (*github.RepositoryCommit, error) {
 	return commits[0], nil
 }
 
+// getFileOrDir returns a single file's RepositoryContent.
+// Unlike GetContents, it filters out directory results so callers
+// get a clean nil when the path is a directory.
+func (c *Client) getFileOrDir(path string) (*github.RepositoryContent, *github.Response, error) {
+	file, dirs, resp, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(dirs) > 0 {
+		return nil, resp, nil
+	}
+	return file, resp, nil
+}
+
 // DeleteFile deletes a file from the repository.
 func (c *Client) DeleteFile(contentPath, message string) (*github.RepositoryContentResponse, *github.Response, error) {
-	// First get the SHA of the file
-	file, _, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, contentPath, nil)
+	file, _, err := c.getFileOrDir(contentPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get file: %w", err)
 	}
+	if file == nil {
+		return nil, nil, fmt.Errorf("path is a directory (use -r to delete recursively)")
+	}
 
-	// Use the SHA from the file object
 	sha := file.SHA
 	if sha == nil {
 		return nil, nil, fmt.Errorf("file SHA is nil")
