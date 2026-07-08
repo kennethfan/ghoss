@@ -106,6 +106,22 @@ func (c *Client) ListFiles(path string) ([]*github.RepositoryContent, *github.Re
 	return files, resp, nil
 }
 
+// ListCommits returns the latest commit for a file path (1 result).
+func (c *Client) ListCommits(path string) (*github.RepositoryCommit, error) {
+	opts := &github.CommitsListOptions{
+		Path: path,
+		ListOptions: github.ListOptions{PerPage: 1},
+	}
+	commits, _, err := c.client.Repositories.ListCommits(c.ctx, c.owner, c.repo, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(commits) == 0 {
+		return nil, nil
+	}
+	return commits[0], nil
+}
+
 // DeleteFile deletes a file from the repository.
 func (c *Client) DeleteFile(contentPath, message string) (*github.RepositoryContentResponse, *github.Response, error) {
 	// First get the SHA of the file
