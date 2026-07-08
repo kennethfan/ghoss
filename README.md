@@ -15,8 +15,9 @@ GitHub **不是**为对象存储设计的。本工具仅适用于：
 
 - 📤 上传文件到 GitHub 仓库
 - 📥 从 GitHub 仓库下载文件
-- 📋 列出仓库中的文件
-- 🗑️ 删除仓库中的文件
+- 📋 列出仓库中的文件（支持长格式、排序、递归、JSON 输出）
+- 🗑️ 删除仓库中的文件（支持递归删除目录）
+- ✂️ 移动/重命名文件和目录
 - 🔗 生成文件公开访问链接
 - 💾 本地配置管理
 - 📁 支持递归上传目录
@@ -104,18 +105,50 @@ sudo cp ghoss /usr/local/bin/
 
 # 列出子目录
 ./ghoss ls photos/
+
+# 长格式（带大小和时间）
+./ghoss ls -l photos/
+
+# 按时间排序
+./ghoss ls -t
+
+# 递归列出子目录
+./ghoss ls -R
+
+# JSON 格式输出
+./ghoss ls --json
 ```
 
-### 6. 获取访问链接
+### 6. 移动/重命名文件
+
+```bash
+# 重命名文件
+./ghoss mv docs/report.pdf docs/report-2026.pdf
+
+# 移动到目录
+./ghoss mv image.png images/
+
+# 自定义提交信息
+./ghoss mv src.txt dst.txt -m "move file"
+
+# 移动目录（自动递归）
+./ghoss mv photos/vacation/ backup/2026/
+```
+
+### 7. 获取访问链接
 
 ```bash
 ./ghoss url photos/image.jpg
 ```
 
-### 7. 删除文件
+### 8. 删除文件
 
 ```bash
+# 删除单个文件
 ./ghoss rm photos/image.jpg
+
+# 递归删除目录
+./ghoss rm -r old-photos/
 ```
 
 ## 命令参考
@@ -172,13 +205,45 @@ sudo cp ghoss /usr/local/bin/
 列出仓库中的文件。
 
 ```bash
-./ghoss ls [path]
+./ghoss ls [path] [flags]
 ```
+
+**Flags:**
+- `-l, --long`: 长格式（显示权限、大小、修改时间）
+- `-h, --human-readable`: 人类可读文件大小
+- `--sort name|time|size`: 排序字段（默认 name）
+- `-t, --sort-by-time`: 按修改时间排序
+- `-S, --sort-by-size`: 按文件大小排序
+- `-r, --reverse`: 反向排序
+- `-R, --recursive`: 递归列出子目录
+- `--json`: JSON 格式输出
 
 **示例:**
 ```bash
 ./ghoss ls
 ./ghoss ls photos/
+./ghoss ls -l
+./ghoss ls -t -r
+./ghoss ls -R --json
+```
+
+### `ghoss mv`
+
+移动/重命名文件或目录。目录移动自动递归。
+
+```bash
+./ghoss mv <source> <destination> [flags]
+```
+
+**Flags:**
+- `-m, --message string`: Git 提交信息
+
+**示例:**
+```bash
+./ghoss mv file.txt renamed.txt
+./ghoss mv file.txt images/
+./ghoss mv old-dir/ new-dir/
+./ghoss mv src dst -m "my commit message"
 ```
 
 ### `ghoss rm`
@@ -186,12 +251,16 @@ sudo cp ghoss /usr/local/bin/
 删除仓库中的文件。
 
 ```bash
-./ghoss rm <file-path>
+./ghoss rm <file-path> [flags]
 ```
+
+**Flags:**
+- `-r, --recursive`: 递归删除目录
 
 **示例:**
 ```bash
 ./ghoss rm photos/old-image.jpg
+./ghoss rm -r old-photos/
 ```
 
 ### `ghoss url`
@@ -256,17 +325,20 @@ cache:
 ghoss/
 ├── cmd/
 │   └── ghoss/
-│       └── main.go          # CLI 入口
+│       └── main.go          # CLI 入口（Cobra 命令）
 ├── internal/
 │   ├── github/
 │   │   └── client.go        # GitHub API 客户端
 │   ├── storage/
-│   │   └── storage.go       # 存储逻辑
+│   │   └── storage.go       # 本地文件操作
+│   ├── lister/
+│   │   └── lister.go        # ls 输出引擎
 │   └── config/
 │       └── config.go        # 配置管理
 ├── pkg/
 │   └── models/
 │       └── file.go          # 数据模型
+├── bin/                     # 编译产物
 ├── go.mod
 ├── README.md
 └── .gitignore

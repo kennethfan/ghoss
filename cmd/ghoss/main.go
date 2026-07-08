@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghoss/internal/config"
 	"github.com/ghoss/internal/github"
+	"github.com/ghoss/internal/lister"
 	"github.com/ghoss/internal/storage"
 	"github.com/ghoss/pkg/models"
 	"github.com/spf13/cobra"
@@ -158,6 +159,7 @@ var uploadCmd = &cobra.Command{
 var uploadPath string
 var uploadMessage string
 var uploadRecursive bool
+var mvMessage string
 
 // uploadFile handles the actual file upload logic.
 func uploadFile(client *github.Client, filePath string, cfg *config.Config) models.UploadResult {
@@ -345,6 +347,18 @@ func downloadFile(client *github.Client, filePath, outputPath string) models.Dow
 	}
 }
 
+// ls command flags
+var (
+	lsLong        bool
+	lsHuman       bool
+	lsSortBy      string
+	lsSortByTime  bool
+	lsSortBySize  bool
+	lsReverse     bool
+	lsRecursive   bool
+	lsJSON        bool
+)
+
 // lsCmd represents the list command.
 var lsCmd = &cobra.Command{
 	Use:   "ls [path]",
@@ -352,52 +366,60 @@ var lsCmd = &cobra.Command{
 	Long:  `List files and directories in your GitHub repository.`,
 	Example: `  ghoss ls
   ghoss ls photos/
-  ghoss ls docs/`,
+  ghoss ls -l
+  ghoss ls --json`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Create GitHub client
 		client := github.NewClient(cfg.Github.Token, cfg.Github.Owner, cfg.Github.Repo, cfg.Github.Branch)
-
 		if !client.IsConfigured() {
 			fmt.Fprintln(os.Stderr, "Error: GitHub repository not configured. Please run 'ghoss init' first.")
 			os.Exit(1)
 		}
 
-		path := ""
+		lsPath := ""
 		if len(args) > 0 {
-			path = storage.NormalizePath(args[0])
+			lsPath = storage.NormalizePath(args[0])
 		}
 
-		files, _, err := client.ListFiles(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error listing files: %v\n", err)
+		// -t and -S override --sort (S overrides t)
+		sortBy := lsSortBy
+		if lsSortByTime {
+			sortBy = "time"
+		}
+		if lsSortBySize {
+			sortBy = "size"
+		}
+
+		opts := lister.Options{
+			Long:      lsLong,
+			Human:     lsHuman || lsLong, // -l implies human-readable
+			SortBy:    sortBy,
+			Reverse:   lsReverse,
+			Recursive: lsRecursive,
+			JSON:      lsJSON,
+		}
+
+		if err := lister.Run(client, lsPath, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
-		}
-
-		fmt.Printf("Contents of %s:\n", path)
-		for _, file := range files {
-			kind := "file"
-			if *file.Type == "dir" {
-				kind = "dir"
-			}
-			fmt.Printf("[%s] %s (%d bytes)\n", kind, *file.Name, *file.Size)
 		}
 	},
 }
+
+var rmRecursive bool
 
 // rmCmd represents the remove command.
 var rmCmd = &cobra.Command{
 	Use:   "rm [file path]",
 	Short: "Delete a file from GitHub repository",
-	Long:  `Delete a file from your GitHub repository.`,
+	Long:  `Delete a file or directory from your GitHub repository. Use -r to delete directories recursively.`,
 	Example: `  ghoss rm photos/image.jpg
-  ghoss rm docs/report.pdf`,
+  ghoss rm -r photos/`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
 			fmt.Fprintln(os.Stderr, "Error: please specify the file path to delete")
@@ -405,32 +427,182 @@ var rmCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Load configuration
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Create GitHub client
 		client := github.NewClient(cfg.Github.Token, cfg.Github.Owner, cfg.Github.Repo, cfg.Github.Branch)
-
 		if !client.IsConfigured() {
 			fmt.Fprintln(os.Stderr, "Error: GitHub repository not configured. Please run 'ghoss init' first.")
 			os.Exit(1)
 		}
 
 		filePath := storage.NormalizePath(args[0])
-		message := "delete: " + filepath.Base(filePath)
+		if rmRecursive {
+			deleteRecursive(client, filePath)
+		} else {
+			message := "delete: " + filepath.Base(filePath)
+			_, _, err = client.DeleteFile(filePath, message)
+			if err != nil {
+				if strings.Contains(err.Error(), "is a directory") {
+					fmt.Fprintf(os.Stderr, "Error: %s is a directory. Use -r to delete recursively.\n", filePath)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
+				}
+				os.Exit(1)
+			}
+			fmt.Printf("Successfully deleted: %s\n", filePath)
+		}
+	},
+}
 
-		_, _, err = client.DeleteFile(filePath, message)
+var mvCmd = &cobra.Command{
+	Use:   "mv <source> <destination>",
+	Short: "Move or rename a file or directory",
+	Long:  `Move or rename files and directories in your GitHub repository. Directory moves are always recursive.`,
+	Example: `  ghoss mv docs/report.pdf docs/archive/report.pdf
+  ghoss mv photos/vacation/ backup/2026/
+  ghoss mv image.png images/ -m "organize images"`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg, err := config.LoadConfig()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Successfully deleted: %s\n", filePath)
+		client := github.NewClient(cfg.Github.Token, cfg.Github.Owner, cfg.Github.Repo, cfg.Github.Branch)
+		if !client.IsConfigured() {
+			fmt.Fprintln(os.Stderr, "Error: GitHub repository not configured. Please run 'ghoss init' first.")
+			os.Exit(1)
+		}
+
+		src := storage.NormalizePath(args[0])
+		dst := storage.NormalizePath(args[1])
+
+		srcContents, _, err := client.ListFiles(src)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: source not found: %s\n", src)
+			os.Exit(1)
+		}
+
+		isDir, dErr := client.IsDirectory(dst)
+		if dErr == nil && !isDir {
+			fmt.Fprintf(os.Stderr, "Error: destination already exists: %s\n", dst)
+			os.Exit(1)
+		} else if dErr == nil && isDir {
+			dst = strings.TrimSuffix(dst, "/") + "/" + filepath.Base(src)
+		}
+
+		message := mvMessage
+		if message == "" {
+			message = "move: " + src + " → " + dst
+		}
+
+		if len(srcContents) > 0 {
+			moveDir(client, src, dst, message)
+		} else {
+			moveFile(client, src, dst, message)
+		}
 	},
+}
+
+func moveFile(client *github.Client, src, dst, message string) {
+	content, _, err := client.DownloadFile(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error downloading %s: %v\n", src, err)
+		os.Exit(1)
+	}
+
+	_, _, err = client.CreateFile(dst, content, message)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", dst, err)
+		os.Exit(1)
+	}
+
+	_, _, err = client.DeleteFile(src, message)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", src, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Moved: %s → %s\n", src, dst)
+}
+
+func moveDir(client *github.Client, src, dst, message string) {
+	entries, _, err := client.ListFiles(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing %s: %v\n", src, err)
+		os.Exit(1)
+	}
+
+	srcPrefix := strings.TrimSuffix(src, "/") + "/"
+	dstPrefix := strings.TrimSuffix(dst, "/") + "/"
+
+	var errors bool
+	for _, e := range entries {
+		if e.Type == nil {
+			continue
+		}
+		srcPath := e.GetPath()
+		relPath := strings.TrimPrefix(srcPath, srcPrefix)
+		dstPath := dstPrefix + relPath
+
+		if *e.Type == "dir" {
+			moveDir(client, srcPath, dstPath, message)
+		} else {
+			fileMsg := mvMessage
+			if fileMsg == "" {
+				fileMsg = "move: " + srcPath + " → " + dstPath
+			}
+			content, _, err := client.DownloadFile(srcPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error downloading %s: %v\n", srcPath, err)
+				errors = true
+				continue
+			}
+			_, _, err = client.CreateFile(dstPath, content, fileMsg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", dstPath, err)
+				errors = true
+				continue
+			}
+			_, _, err = client.DeleteFile(srcPath, fileMsg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", srcPath, err)
+				errors = true
+				continue
+			}
+			fmt.Printf("Moved: %s\n", srcPath)
+		}
+	}
+	if errors {
+		os.Exit(1)
+	}
+}
+
+// deleteRecursive lists all files under path and deletes each one.
+func deleteRecursive(client *github.Client, dirPath string) {
+	entries, _, err := client.ListFiles(dirPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing %s: %v\n", dirPath, err)
+		os.Exit(1)
+	}
+	for _, e := range entries {
+		if e.Type != nil && *e.Type == "dir" {
+			deleteRecursive(client, e.GetPath())
+		} else {
+			msg := "delete: " + filepath.Base(e.GetPath())
+			_, _, err := client.DeleteFile(e.GetPath(), msg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", e.GetPath(), err)
+				os.Exit(1)
+			}
+			fmt.Printf("Deleted: %s\n", e.GetPath())
+		}
+	}
 }
 
 // urlCmd generates the public URL for a file.
@@ -533,7 +705,23 @@ func main() {
 	uploadCmd.Flags().BoolVarP(&uploadRecursive, "recursive", "r", false, "Recursively upload directory")
 	
 	downloadCmd.Flags().StringVarP(&outputPathFlag, "output", "o", "", "Output file path")
-	
+
+	// ls flags
+	lsCmd.Flags().BoolVarP(&lsLong, "long", "l", false, "Long format with permissions, size, and time")
+	lsCmd.Flags().BoolVar(&lsHuman, "human-readable", false, "Human-readable file sizes (implied by -l)")
+	lsCmd.Flags().StringVar(&lsSortBy, "sort", "name", "Sort key: name|time|size")
+	lsCmd.Flags().BoolVarP(&lsSortByTime, "sort-by-time", "t", false, "Sort by last modified time")
+	lsCmd.Flags().BoolVarP(&lsSortBySize, "sort-by-size", "S", false, "Sort by file size")
+	lsCmd.Flags().BoolVarP(&lsReverse, "reverse", "r", false, "Reverse sort order")
+	lsCmd.Flags().BoolVarP(&lsRecursive, "recursive", "R", false, "Recursively list subdirectories")
+	lsCmd.Flags().BoolVar(&lsJSON, "json", false, "JSON output format")
+
+	// rm flags
+	rmCmd.Flags().BoolVarP(&rmRecursive, "recursive", "r", false, "Recursively delete directories")
+
+	// mv flags
+	mvCmd.Flags().StringVarP(&mvMessage, "message", "m", "", "Git commit message")
+
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 
 	// Add subcommands
@@ -542,6 +730,7 @@ func main() {
 	rootCmd.AddCommand(downloadCmd)
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(rmCmd)
+	rootCmd.AddCommand(mvCmd)
 	rootCmd.AddCommand(urlCmd)
 
 	// Execute

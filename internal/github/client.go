@@ -57,6 +57,25 @@ func (c *Client) UploadFile(filePath, contentPath, message string) (*github.Repo
 	return c.client.Repositories.CreateFile(c.ctx, c.owner, c.repo, contentPath, opts)
 }
 
+// CreateFile creates or updates a file from raw byte content.
+func (c *Client) CreateFile(path string, content []byte, message string) (*github.RepositoryContentResponse, *github.Response, error) {
+	opts := &github.RepositoryContentFileOptions{
+		Content: content,
+		Message: github.String(message),
+		Branch:  github.String(c.branch),
+	}
+	return c.client.Repositories.CreateFile(c.ctx, c.owner, c.repo, path, opts)
+}
+
+// IsDirectory checks whether path is an existing directory in the repo.
+func (c *Client) IsDirectory(path string) (bool, error) {
+	_, dirs, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, path, nil)
+	if err != nil {
+		return false, err
+	}
+	return dirs != nil, nil
+}
+
 // DownloadFile downloads a file from the GitHub repository.
 // Returns the original raw file content using go-github library's native method.
 func (c *Client) DownloadFile(contentPath string) ([]byte, *github.RepositoryContent, error) {
@@ -106,15 +125,46 @@ func (c *Client) ListFiles(path string) ([]*github.RepositoryContent, *github.Re
 	return files, resp, nil
 }
 
+// ListCommits returns the latest commit for a file path (1 result).
+func (c *Client) ListCommits(path string) (*github.RepositoryCommit, error) {
+	opts := &github.CommitsListOptions{
+		Path: path,
+		ListOptions: github.ListOptions{PerPage: 1},
+	}
+	commits, _, err := c.client.Repositories.ListCommits(c.ctx, c.owner, c.repo, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(commits) == 0 {
+		return nil, nil
+	}
+	return commits[0], nil
+}
+
+// getFileOrDir returns a single file's RepositoryContent.
+// Unlike GetContents, it filters out directory results so callers
+// get a clean nil when the path is a directory.
+func (c *Client) getFileOrDir(path string) (*github.RepositoryContent, *github.Response, error) {
+	file, dirs, resp, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(dirs) > 0 {
+		return nil, resp, nil
+	}
+	return file, resp, nil
+}
+
 // DeleteFile deletes a file from the repository.
 func (c *Client) DeleteFile(contentPath, message string) (*github.RepositoryContentResponse, *github.Response, error) {
-	// First get the SHA of the file
-	file, _, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, contentPath, nil)
+	file, _, err := c.getFileOrDir(contentPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get file: %w", err)
 	}
+	if file == nil {
+		return nil, nil, fmt.Errorf("path is a directory (use -r to delete recursively)")
+	}
 
-	// Use the SHA from the file object
 	sha := file.SHA
 	if sha == nil {
 		return nil, nil, fmt.Errorf("file SHA is nil")
