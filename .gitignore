@@ -8,6 +8,9 @@ build/
 # Cache
 .cache/
 
+# Agent state
+.omo/
+
 # Test artifacts
 *.test
 *.out
