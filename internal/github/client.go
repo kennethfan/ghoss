@@ -57,6 +57,25 @@ func (c *Client) UploadFile(filePath, contentPath, message string) (*github.Repo
 	return c.client.Repositories.CreateFile(c.ctx, c.owner, c.repo, contentPath, opts)
 }
 
+// CreateFile creates or updates a file from raw byte content.
+func (c *Client) CreateFile(path string, content []byte, message string) (*github.RepositoryContentResponse, *github.Response, error) {
+	opts := &github.RepositoryContentFileOptions{
+		Content: content,
+		Message: github.String(message),
+		Branch:  github.String(c.branch),
+	}
+	return c.client.Repositories.CreateFile(c.ctx, c.owner, c.repo, path, opts)
+}
+
+// IsDirectory checks whether path is an existing directory in the repo.
+func (c *Client) IsDirectory(path string) (bool, error) {
+	_, dirs, _, err := c.client.Repositories.GetContents(c.ctx, c.owner, c.repo, path, nil)
+	if err != nil {
+		return false, err
+	}
+	return dirs != nil, nil
+}
+
 // DownloadFile downloads a file from the GitHub repository.
 // Returns the original raw file content using go-github library's native method.
 func (c *Client) DownloadFile(contentPath string) ([]byte, *github.RepositoryContent, error) {
