@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/ghoss/internal/github"
-	"github.com/google/go-github/github"
+	gogithub "github.com/google/go-github/github"
 )
 
 // Options controls ls output behavior.
@@ -61,8 +61,8 @@ func formatTime(t time.Time) string {
 }
 
 // listAllRecursive walks all subdirectories recursively via API calls.
-func listAllRecursive(client *github.Client, dirPath string) ([]*github.RepositoryContent, error) {
-	var all []*github.RepositoryContent
+func listAllRecursive(client *github.Client, dirPath string) ([]*gogithub.RepositoryContent, error) {
+	var all []*gogithub.RepositoryContent
 	entries, _, err := client.ListFiles(dirPath)
 	if err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func fetchModTimes(client *github.Client, entries []*Entry) {
 }
 
 // toEntries converts go-github RepositoryContent slice to our Entry slice.
-func toEntries(contents []*github.RepositoryContent) []*Entry {
+func toEntries(contents []*gogithub.RepositoryContent) []*Entry {
 	entries := make([]*Entry, 0, len(contents))
 	for _, c := range contents {
 		e := &Entry{
@@ -212,13 +212,13 @@ func writeTable(w io.Writer, entries []*Entry, opts Options) {
 // Run executes the ls command with given options.
 // It does NOT exit the process — caller handles errors.
 func Run(client *github.Client, lsPath string, opts Options) error {
-	var contents []*github.RepositoryContent
+	var contents []*gogithub.RepositoryContent
 	var err error
 
 	if opts.Recursive {
 		contents, err = listAllRecursive(client, lsPath)
 	} else {
-		_, contents, err = client.ListFiles(lsPath)
+		contents, _, err = client.ListFiles(lsPath)
 	}
 	if err != nil {
 		return fmt.Errorf("listing %s: %w", lsPath, err)
